@@ -11,12 +11,12 @@ class SocksArguments(TaskArguments):
         self.args = [
             CommandParameter(
                 name="action", 
-                choices=["start","stop"], 
+                choices=["start", "stop"], 
                 parameter_group_info=[ParameterGroupInfo(
                     required=True
                 )], 
                 type=ParameterType.ChooseOne, 
-                description="Start or stop the enhanced SOCKS server."
+                description="Start or stop the SOCKS server."
             ),
             CommandParameter(
                 name="port", 
@@ -43,11 +43,13 @@ class SocksArguments(TaskArguments):
                 raise Exception("Invalid action \"{}\" given. Require one of: {}".format(action, ", ".join(self.valid_actions)))
             self.add_arg("action", action)
             if action == "start":
-                port = 7005  # Default port
-                if len(parts) >= 2:
+                port = -1
+                if len(parts) < 2:
+                    port = 7005
+                else:
                     try:
                         port = int(parts[1])
-                    except Exception:
+                    except Exception as e:
                         raise Exception("Invalid port number given: {}. Must be int.".format(parts[1]))
                 self.add_arg("port", port, ParameterType.Number)
 
@@ -55,9 +57,24 @@ class SocksArguments(TaskArguments):
 class SocksCommand(CommandBase):
     cmd = "socks"
     needs_admin = False
-    help_cmd = "socks [action] [port number]"
-    description = "Enhanced SOCKS 5 compliant proxy with improved performance, larger buffers, and better error handling for proxying data from outside machines into the target network."
-    version = 1
+    help_cmd = "socks [start|stop] [port]"
+    description = """
+    Enhanced SOCKS5 proxy with connection pooling, batching, and performance optimizations.
+    
+    Features:
+    - Connection pooling for improved performance
+    - Packet batching for reduced overhead
+    - IPv6 support
+    - Real-time statistics
+    - Automatic cleanup of stale connections
+    - Optimized buffer sizes and connection handling
+    
+    Examples:
+    socks start 1080          # Start on port 1080
+    socks start               # Start on default port 7005
+    socks stop                # Stop the proxy
+    """
+    version = 2
     is_exit = False
     is_file_browse = False
     is_process_list = False
@@ -66,10 +83,10 @@ class SocksCommand(CommandBase):
     is_remove_file = False
     author = "@ajpc500 (enhanced)"
     argument_class = SocksArguments
-    attackmapping = ["T1090"]
+    attackmapping = ["T1090", "T1090.001", "T1090.002"]
     attributes = CommandAttributes(
-        supported_python_versions=["Python 3.8", "Python 2.7"],
-        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
+        supported_python_versions=["Python 3.8", "Python 3.9", "Python 3.10", "Python 3.11"],
+        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux],
     )
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
@@ -77,6 +94,7 @@ class SocksCommand(CommandBase):
             TaskID=taskData.Task.ID,
             Success=True,
         )
+        
         if taskData.args.get_arg("action") == "start":
             port = taskData.args.get_arg("port") or 7005
             resp = await SendMythicRPCProxyStartCommand(MythicRPCProxyStartMessage(
@@ -95,11 +113,10 @@ class SocksCommand(CommandBase):
             else:
                 response.DisplayParams = "Started Enhanced SOCKS5 server on port {}".format(port)
         else:
-            port = taskData.args.get_arg("port")
             resp = await SendMythicRPCProxyStopCommand(MythicRPCProxyStopMessage(
                 TaskID=taskData.Task.ID,
                 PortType="socks",
-                Port=port
+                Port=taskData.args.get_arg("port")
             ))
             if not resp.Success:
                 response.TaskStatus = MythicStatus.Error
