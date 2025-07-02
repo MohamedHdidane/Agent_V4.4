@@ -115,9 +115,8 @@ class PortScanCommand(CommandBase):
     parameters = []
     attackmapping = ["T1046"]  # Network Service Scanning
     argument_class = PortScanArguments
-    browser_script = BrowserScript(script_name="port_scan", author="@ajpc500", for_new_ui=True)
+    browser_script = BrowserScript(script_name="port_scan", for_new_ui=True)
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
         supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux],
     )
 

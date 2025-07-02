@@ -11,12 +11,12 @@ class SocksArguments(TaskArguments):
         self.args = [
             CommandParameter(
                 name="action", 
-                choices=["start", "stop"], 
+                choices=["start","stop"], 
                 parameter_group_info=[ParameterGroupInfo(
                     required=True
                 )], 
                 type=ParameterType.ChooseOne, 
-                description="Start or stop the SOCKS server."
+                description="Start or stop the socks server."
             ),
             CommandParameter(
                 name="port", 
@@ -24,7 +24,7 @@ class SocksArguments(TaskArguments):
                     required=False
                 )], 
                 type=ParameterType.Number, 
-                description="Port to start the SOCKS server on (default: 7005)."
+                description="Port to start the socks server on."
             ),
         ]
 
@@ -57,50 +57,33 @@ class SocksArguments(TaskArguments):
 class SocksCommand(CommandBase):
     cmd = "socks"
     needs_admin = False
-    help_cmd = "socks [start|stop] [port]"
-    description = """
-    Enhanced SOCKS5 proxy with connection pooling, batching, and performance optimizations.
-    
-    Features:
-    - Connection pooling for improved performance
-    - Packet batching for reduced overhead
-    - IPv6 support
-    - Real-time statistics
-    - Automatic cleanup of stale connections
-    - Optimized buffer sizes and connection handling
-    
-    Examples:
-    socks start 1080          # Start on port 1080
-    socks start               # Start on default port 7005
-    socks stop                # Stop the proxy
-    """
-    version = 2
+    help_cmd = "socks [action] [port number]"
+    description = "Enable SOCKS 5 compliant proxy on the agent such that you may proxy data in from an outside machine into the target network."
+    version = 1
     is_exit = False
     is_file_browse = False
     is_process_list = False
     is_download_file = False
     is_upload_file = False
     is_remove_file = False
-    author = "@ajpc500 (enhanced)"
     argument_class = SocksArguments
-    attackmapping = ["T1090", "T1090.001", "T1090.002"]
+    attackmapping = ["T1090"]
     attributes = CommandAttributes(
-        supported_python_versions=["Python 3.8", "Python 3.9", "Python 3.10", "Python 3.11"],
-        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux],
+        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
     )
+
+
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(
             TaskID=taskData.Task.ID,
             Success=True,
         )
-        
         if taskData.args.get_arg("action") == "start":
-            port = taskData.args.get_arg("port") or 7005
             resp = await SendMythicRPCProxyStartCommand(MythicRPCProxyStartMessage(
                 TaskID=taskData.Task.ID,
                 PortType="socks",
-                LocalPort=port
+                LocalPort=taskData.args.get_arg("port")
             ))
 
             if not resp.Success:
@@ -111,7 +94,7 @@ class SocksCommand(CommandBase):
                     Response=resp.Error.encode()
                 ))
             else:
-                response.DisplayParams = "Started Enhanced SOCKS5 server on port {}".format(port)
+                response.DisplayParams = "Started SOCKS5 server on port {}".format(taskData.args.get_arg("port"))
         else:
             resp = await SendMythicRPCProxyStopCommand(MythicRPCProxyStopMessage(
                 TaskID=taskData.Task.ID,
@@ -126,8 +109,9 @@ class SocksCommand(CommandBase):
                     Response=resp.Error.encode()
                 ))
             else:
-                response.DisplayParams = "Stopped Enhanced SOCKS5 server"
+                response.DisplayParams = "Stopped SOCKS5 server on port {}".format(taskData.args.get_arg("port"))
         return response
+
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
         resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)

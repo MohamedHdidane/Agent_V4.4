@@ -23,7 +23,6 @@ class PrivEscCommand(CommandBase):
     argument_class = PrivEscArguments
     browser_script = BrowserScript(script_name="priv_esc", author="@Med", for_new_ui=True)
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
         supported_os=[SupportedOS.Linux, SupportedOS.Windows, SupportedOS.MacOS],
         is_platform_specific = True,
     )

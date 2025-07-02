@@ -50,7 +50,6 @@ class DownloadCommand(CommandBase):
     argument_class = DownloadArguments
     browser_script = BrowserScript(script_name="download", author="@its_a_feature_", for_new_ui=True)
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
         supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
     )
 
