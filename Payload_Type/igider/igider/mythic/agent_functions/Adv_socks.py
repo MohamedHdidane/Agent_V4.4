@@ -2,7 +2,7 @@ from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 import json
 
-class SocksArguments(TaskArguments):
+class Adv_socksArguments(TaskArguments):
 
     valid_actions = ["start", "stop"]
 
