@@ -6,11 +6,8 @@
         import time
         import base64
         import threading
-        import logging
         
-        # Configure logging
-        logging.basicConfig(level=logging.INFO, format=
-            '%(asctime)s - %(levelname)s - %(message)s')
+
         
         # Enhanced configuration with fixed defaults
         MAX_THREADS = 300
@@ -67,10 +64,8 @@
                         if sock in r or sock in w:
                             return sock
                         else:
-                            logging.info(f"Stale connection found in pool for {key}, closing.")
                             sock.close()
                     except Exception as ex:
-                        logging.warning(f"Error checking pooled connection for {key}: {ex}, closing.")
                         try:
                             sock.close()
                         except:
@@ -106,7 +101,6 @@
                 try:
                     self.socks_out.put(packet, timeout=0.1)
                 except queue.Full:
-                    logging.warning(f"High priority queue full for server_id {server_id}")
                     pass
             else:
                 self.socks_out.put(packet)
@@ -122,7 +116,6 @@
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 return sock
             except Exception as err:
-                logging.error(f"Failed to create socket: {str(err)}")
                 return f"Failed to create socket: {str(err)}"
         
         def connect_to_dst(dst_addr, dst_port):
@@ -130,7 +123,6 @@
             # Try to get a pooled connection first
             sock = get_pooled_connection(dst_addr, dst_port)
             if sock:
-                logging.info(f"Reusing pooled connection for {dst_addr}:{dst_port}")
                 return sock
             
             sock = create_socket()
@@ -143,7 +135,6 @@
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, 
                                   OUTGOING_INTERFACE.encode())
                 except PermissionError:
-                    logging.error(f"Permission denied to bind to interface {OUTGOING_INTERFACE}")
                     update_stats('failed_connections')
                     return 0
             
@@ -151,10 +142,8 @@
                 sock.connect((dst_addr, dst_port))
                 update_stats('total_connections')
                 update_stats('active_connections')
-                logging.info(f"Successfully connected to {dst_addr}:{dst_port}")
                 return sock
             except socket.error as e:
-                logging.error(f"Socket connection error to {dst_addr}:{dst_port}: {e}")
                 update_stats('failed_connections')
                 try:
                     sock.close()
@@ -168,50 +157,41 @@
                 message = base64.b64decode(msg["data"])
                 s5_request = message[:BUFSIZE]
             except Exception as e:
-                logging.error(f"Error decoding SOCKS5 request: {e}")
                 return False
             
             if len(s5_request) < 4:
-                logging.warning(f"SOCKS5 request too short: {len(s5_request)} bytes")
                 return False
             
             if (s5_request[0:1] != VER or 
                 s5_request[1:2] != CMD_CONNECT or 
                 s5_request[2:3] != b'\x00'):
-                logging.warning(f"Invalid SOCKS5 request format: {s5_request}")
                 return False
             
             try:
                 if s5_request[3:4] == ATYP_IPV4:
                     if len(s5_request) < 10:
-                        logging.warning("IPv4 SOCKS5 request too short")
                         return False
                     dst_addr = socket.inet_ntoa(s5_request[4:8])
                     dst_port = unpack('>H', s5_request[8:10])[0]
                 elif s5_request[3:4] == ATYP_IPV6:
                     if len(s5_request) < 22:
-                        logging.warning("IPv6 SOCKS5 request too short")
                         return False
                     dst_addr = socket.inet_ntop(socket.AF_INET6, s5_request[4:20])
                     dst_port = unpack('>H', s5_request[20:22])[0]
                 elif s5_request[3:4] == ATYP_DOMAINNAME:
                     if len(s5_request) < 5:
-                        logging.warning("Domain name SOCKS5 request too short")
                         return False
                     sz_domain_name = s5_request[4]
                     if len(s5_request) < 5 + sz_domain_name + 2:
-                        logging.warning("Domain name SOCKS5 request incomplete")
                         return False
                     dst_addr = s5_request[5:5 + sz_domain_name].decode('utf-8')
                     port_offset = 5 + sz_domain_name
                     dst_port = unpack('>H', s5_request[port_offset:port_offset + 2])[0]
                 else:
-                    logging.warning(f"Unsupported ATYP: {s5_request[3:4]}")
                     return False
                 
                 return (dst_addr, dst_port)
             except Exception as e:
-                logging.error(f"Error parsing SOCKS5 request address/port: {e}")
                 return False
         
         def create_connection(msg):
@@ -226,16 +206,13 @@
             
             if not dst or socket_dst == 0:
                 rep = b'\x01'  # General SOCKS server failure
-                logging.error(f"Failed to establish connection for {msg.get('server_id')}")
             else:
                 rep = b'\x00'  # Success
                 try:
                     # Get the actual bound address and port
                     bound_addr, bound_port = socket_dst.getsockname()
                     bnd = socket.inet_aton(bound_addr) + pack(">H", bound_port)
-                    logging.info(f"Connection established and bound to {bound_addr}:{bound_port}")
                 except Exception as e:
-                    logging.warning(f"Could not get bound address/port: {e}")
                     bnd = b'\x00' * 6
             
             # Build SOCKS5 response
@@ -244,7 +221,6 @@
             try:
                 sendSocksPacket(msg["server_id"], reply, msg["exit"], priority=True)
             except Exception as e:
-                logging.error(f"Error sending SOCKS5 reply for {msg.get('server_id')}: {e}")
                 if socket_dst and socket_dst != 0:
                     try:
                         socket_dst.close()
@@ -269,15 +245,12 @@
             while True:
                 # Check if task is still active
                 if task_id not in [task["task_id"] for task in self.taskings]:
-                    logging.info(f"Task {task_id} no longer active, stopping a2m for {server_id}")
                     break
                 elif [task for task in self.taskings 
                       if task["task_id"] == task_id][0]["stopped"]:
-                    logging.info(f"Task {task_id} stopped, stopping a2m for {server_id}")
                     break
                 
                 if server_id not in self.socks_open.keys():
-                    logging.info(f"Server ID {server_id} not in socks_open, stopping a2m.")
                     break
                 
                 try:
@@ -285,14 +258,12 @@
                     reader, _, error = select.select([socket_dst], [], [socket_dst], 0.005)
                     
                     if error:
-                        logging.error(f"Socket error in a2m for {server_id}")
                         break
                     
                     if reader:
                         try:
                             data = socket_dst.recv(BUFSIZE)
                             if not data:
-                                logging.info(f"Socket closed by remote for {server_id}")
                                 sendSocksPacket(server_id, b"", True)
                                 break
                             
@@ -307,7 +278,6 @@
                                 buffer = b""
                         
                         except socket.error as e:
-                            logging.error(f"Socket recv error in a2m for {server_id}: {e}")
                             break
                     
                     # Send any remaining buffered data periodically
@@ -317,7 +287,6 @@
                         buffer = b""
                 
                 except Exception as e:
-                    logging.error(f"Unexpected error in a2m for {server_id}: {e}")
                     break
                 
                 time.sleep(SOCKS_SLEEP_INTERVAL)
@@ -329,9 +298,8 @@
             # Cleanup
             try:
                 socket_dst.close()
-                logging.info(f"Closed socket for {server_id} in a2m.")
             except Exception as e:
-                logging.error(f"Error closing socket in a2m for {server_id}: {e}")
+                pass
             update_stats('active_connections', -1)
         
         def m2a(server_id, socket_dst):
@@ -339,15 +307,12 @@
             while True:
                 # Check if task is still active
                 if task_id not in [task["task_id"] for task in self.taskings]:
-                    logging.info(f"Task {task_id} no longer active, stopping m2a for {server_id}")
                     break
                 elif [task for task in self.taskings 
                       if task["task_id"] == task_id][0]["stopped"]:
-                    logging.info(f"Task {task_id} stopped, stopping m2a for {server_id}")
                     break
                 
                 if server_id not in self.socks_open.keys():
-                    logging.info(f"Server ID {server_id} not in socks_open, stopping m2a.")
                     break
                 
                 try:
@@ -364,11 +329,9 @@
                         except queue.Empty:
                             break
                         except Exception as e:
-                            logging.error(f"Error processing packet in m2a for {server_id}: {e}")
                             return
                     
                 except Exception as e:
-                    logging.error(f"Unexpected error in m2a for {server_id}: {e}")
                     break
                 
                 time.sleep(SOCKS_SLEEP_INTERVAL)
@@ -376,9 +339,8 @@
             # Cleanup
             try:
                 socket_dst.close()
-                logging.info(f"Closed socket for {server_id} in m2a.")
             except Exception as e:
-                logging.error(f"Error closing socket in m2a for {server_id}: {e}")
+                pass
         
         def cleanup_stale_connections():
             """Clean up stale connections in the pool"""
@@ -393,10 +355,8 @@
                             if conn in r or conn in w:
                                 valid_connections.append(conn)
                             else:
-                                logging.info(f"Stale connection found during cleanup for {host_port}, closing.")
                                 conn.close()
                         except Exception as ex:
-                            logging.warning(f"Error checking connection during cleanup for {host_port}: {ex}, closing.")
                             try:
                                 conn.close()
                             except:
@@ -462,13 +422,11 @@
                                     self.socks_open[server_id].put(packet_json["data"])
                                 elif packet_json["exit"]:
                                     self.socks_open.pop(server_id)
-                                    logging.info(f"Removed server_id {server_id} from socks_open due to exit signal.")
                             else:
                                 # New connection
                                 if not packet_json["exit"]:
                                     if active_count() > MAX_THREADS:
                                         time.sleep(0.1)
-                                        logging.warning(f"Max threads {MAX_THREADS} reached, delaying new connection.")
                                         continue
                                     
                                     self.socks_open[server_id] = queue.Queue()
@@ -489,10 +447,8 @@
                                         )
                                         send_thread.start()
                                         recv_thread.start()
-                                        logging.info(f"Started new a2m/m2a threads for server_id {server_id}")
                                     else:
-                                        logging.error(f"Failed to create socket for new connection {server_id}")
-                        
+                                        pass
                         packet_batch = []
                         last_batch_time = time.time()
                 
@@ -500,7 +456,6 @@
                     pass
                 except Exception as e:
                     self.sendTaskOutputUpdate(task_id, f"[!] Error processing packets: {str(e)}\n")
-                    logging.critical(f"Main loop error processing packets: {e}")
                 
                 time.sleep(SOCKS_SLEEP_INTERVAL)
         
@@ -512,9 +467,7 @@
                         task = [task for task in self.taskings 
                                if task["task_id"] == task_id_from_name][0]
                         task["stopped"] = task["completed"] = True
-                        logging.info(f"Signaled task {task_id_from_name} to stop.")
                     except Exception as e:
-                        logging.error(f"Error signaling thread to stop: {e}")
                         pass
                 
                 # Clean up connection pool
@@ -526,10 +479,8 @@
                             except:
                                 pass
                     connection_pool.clear()
-                    logging.info("Connection pool cleared.")
                 
                 self.socks_open = {}
-                logging.info("socks_open dictionary cleared.")
                 return "[*] Enhanced SOCKS Proxy stopped and cleaned up."
             else:
                 return "[!] No SOCKS Proxy running to stop."
