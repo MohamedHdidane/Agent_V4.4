@@ -46,7 +46,7 @@ class RmCommand(CommandBase):
     browser_script = BrowserScript(script_name="ls")
     attributes = CommandAttributes(
         supported_python_versions=["Python 3.8"],
-        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
+        supported_os=[SupportedOS.Windows],
     )
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:
