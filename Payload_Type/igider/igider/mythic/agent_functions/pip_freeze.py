@@ -2,7 +2,7 @@ from mythic_container.MythicCommandBase import *
 import json
 from mythic_container.MythicRPC import *
 
-class JobsArguments(TaskArguments):
+class PipFreezeArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = []
@@ -11,11 +11,11 @@ class JobsArguments(TaskArguments):
         pass
 
 
-class JobsCommand(CommandBase):
-    cmd = "jobs"
+class PipFreezeCommand(CommandBase):
+    cmd = "pip_freeze"
     needs_admin = False
-    help_cmd = "jobs"
-    description = "List running jobs"
+    help_cmd = "pip_freeze"
+    description = "This programmatically lists all installed modules."
     version = 1
     is_exit = False
     is_file_browse = False
@@ -23,11 +23,11 @@ class JobsCommand(CommandBase):
     is_download_file = False
     is_remove_file = False
     is_upload_file = False
-    argument_class = JobsArguments
+    argument_class = PipFreezeArguments
     attackmapping = []
-    browser_script = BrowserScript(script_name="jobs", for_new_ui=True)
     attributes = CommandAttributes(
-        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
+        supported_python_versions=["Python 2.7", "Python 3.8"],
+        supported_os=[ SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
     )
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:

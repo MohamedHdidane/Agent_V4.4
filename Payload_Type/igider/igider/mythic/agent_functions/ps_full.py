@@ -1,8 +1,10 @@
 from mythic_container.MythicCommandBase import *
 import json
 from mythic_container.MythicRPC import *
+import sys
 
-class JobsArguments(TaskArguments):
+
+class PsFullArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = []
@@ -11,26 +13,23 @@ class JobsArguments(TaskArguments):
         pass
 
 
-class JobsCommand(CommandBase):
-    cmd = "jobs"
+class PsFullCommand(CommandBase):
+    cmd = "ps_full"
     needs_admin = False
-    help_cmd = "jobs"
-    description = "List running jobs"
-    version = 1
-    is_exit = False
-    is_file_browse = False
-    is_process_list = False
-    is_download_file = False
-    is_remove_file = False
-    is_upload_file = False
-    argument_class = JobsArguments
-    attackmapping = []
-    browser_script = BrowserScript(script_name="jobs", for_new_ui=True)
+    help_cmd = "ps_full"
+    description = "Get full process listing."
+    version = 2
+    attackmapping = ["T1106"]
+    supported_ui_features = ["process_browser:list"]
+    argument_class = PsFullArguments
+    browser_script = BrowserScript(script_name="ps_full", for_new_ui=True)
     attributes = CommandAttributes(
-        supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
+        supported_python_versions=[ "Python 3.8" ],
+        supported_os=[ SupportedOS.Windows ],
     )
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:
+        task.display_params = "Getting full process listing"
         return task
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
