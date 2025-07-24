@@ -21,4 +21,4 @@
             responses = [{ "task_id": task_id, "user_output": "Loaded command: {}".format(command), "commands": cmd_list, "completed": True }]
             message = { "action": "post_response", "responses": responses }
             response_data = self.postMessageAndRetrieveResponse(message)
-        else: return "Failed to upload '{}' command".format(command)
+        else: return "Failed to upload '{}' command".format(command
