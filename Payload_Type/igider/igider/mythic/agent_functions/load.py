@@ -39,7 +39,7 @@ class LoadArguments(TaskArguments):
             raise Exception(f"Failed to get callback: {callbacks.Error}")
         
         all_cmds = await SendMythicRPCCommandSearch(MythicRPCCommandSearchMessage(
-            SearchPayloadTypeName="medusa",
+            SearchPayloadTypeName="igider",
             SearchOS=payload_os,
             SearchAttributes={
                 "supported_python_versions": [python_version],
@@ -51,7 +51,7 @@ class LoadArguments(TaskArguments):
         ))
 
         if not all_cmds.Success:
-            raise Exception("Failed to get commands for medusa agent: {}".format(all_cmds.Error))
+            raise Exception("Failed to get commands for igider agent: {}".format(all_cmds.Error))
         if not loaded_cmds.Success:
             raise Exception("Failed to fetch loaded commands from callback {}: {}".format(inputMsg.Callback, loaded_cmds.Error))
 
@@ -86,7 +86,7 @@ class LoadCommand(CommandBase):
     attackmapping = ["T1030", "T1129"]
     argument_class = LoadArguments
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
+        supported_python_versions=["Python 3.8"],
         supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
     )
 
@@ -100,7 +100,7 @@ class LoadCommand(CommandBase):
         )
 
         command = await SendMythicRPCCommandSearch(MythicRPCCommandSearchMessage(
-            SearchPayloadTypeName="medusa",
+            SearchPayloadTypeName="igider",
             SearchCommandNames=[taskData.args.get_arg("command")],
             SearchOS=taskData.Payload.OS
         ))
@@ -110,7 +110,7 @@ class LoadCommand(CommandBase):
             if build_param.Name == 'python_version':
                 py_ver = build_param.Value
         
-        py_suffix = ".py2" if py_ver == "Python 2.7" else ".py3"
+        py_suffix = ".py" 
 
         cmd_code = ""
         if command.Success:
@@ -136,7 +136,7 @@ class LoadCommand(CommandBase):
                     TaskID=taskData.Task.ID,
                     Comment=f"Loading the following command: {loadingCommand}\n",
                     FileContents=cmd_code.encode(),
-                    Filename=f"medusa load command",
+                    Filename=f"igider load command",
                     DeleteAfterFetch=True
                 ))
                 if resp.Success:

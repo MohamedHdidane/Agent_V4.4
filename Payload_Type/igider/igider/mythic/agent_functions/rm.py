@@ -45,7 +45,7 @@ class RmCommand(CommandBase):
     argument_class = RmArguments
     browser_script = BrowserScript(script_name="ls")
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
+        supported_python_versions=["Python 3.8"],
         supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
     )
 

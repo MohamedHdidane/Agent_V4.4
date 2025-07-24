@@ -35,7 +35,7 @@ class UnloadCommand(CommandBase):
     attackmapping = ["T1030", "T1129"]
     argument_class = UnloadArguments
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
+        supported_python_versions=["Python 3.8"],
         supported_os=[SupportedOS.MacOS, SupportedOS.Windows, SupportedOS.Linux ],
     )
 

@@ -43,7 +43,7 @@ class ShinjectCommand(CommandBase):
 
     argument_class = ShinjectArguments
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
+        supported_python_versions=["Python 3.8"],
         supported_os=[ SupportedOS.Windows ]
     )
 

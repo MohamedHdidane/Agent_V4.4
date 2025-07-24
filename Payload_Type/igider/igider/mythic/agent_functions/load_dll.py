@@ -46,7 +46,7 @@ class LoadDllCommand(CommandBase):
     attackmapping = [ "T1059.006", "T1127" ]
     argument_class = LoadDllArguments
     attributes = CommandAttributes(
-        supported_python_versions=["Python 2.7", "Python 3.8"],
+        supported_python_versions=["Python 3.8"],
         supported_os=[SupportedOS.Windows],
     )
 
